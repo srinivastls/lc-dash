@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Activity, ArrowUpRight, Brain, CalendarDays, CheckCircle2, Flame, RefreshCw, Target, Trophy, BookOpen, Clock3, RotateCcw, Plus, Trash2 } from "lucide-react";
+import { Activity, ArrowUpRight, Brain, CalendarDays, CheckCircle2, Flame, RefreshCw, Target, Trophy, BookOpen, Clock3, RotateCcw, Plus, Trash2, Search, ExternalLink, ListChecks } from "lucide-react";
 
 type Revision = { id: string; title: string; topic: string; due: string; note: string };
+type SolvedProblem = { id: string; title: string; slug: string; difficulty: string; timestamp: number | null; language: string; status: string; url: string };
 type Stats = {
   username: string;
   totalSolved: number | null;
@@ -30,7 +31,12 @@ export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"overview" | "topics" | "revision">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "topics" | "revision" | "solved">("overview");
+  const [solvedProblems, setSolvedProblems] = useState<SolvedProblem[]>([]);
+  const [solvedLoading, setSolvedLoading] = useState(false);
+  const [solvedError, setSolvedError] = useState("");
+  const [solvedSearch, setSolvedSearch] = useState("");
+  const [difficultyFilter, setDifficultyFilter] = useState("All");
   const [dailyGoal, setDailyGoal] = useState(2);
   const [completedToday, setCompletedToday] = useState(0);
   const [revisionTitle, setRevisionTitle] = useState("");
@@ -76,6 +82,20 @@ export default function Dashboard() {
   const calendarEntries = stats ? Object.entries(stats.calendar).sort(([a], [b]) => a.localeCompare(b)).slice(-140) : [];
 
   useEffect(() => { void loadStats(); }, []);
+  async function loadSolvedProblems() {
+    const clean = (stats?.username || username).trim().replace(/^@/, "");
+    if (!clean) { setSolvedError("Enter your LeetCode username above first."); return; }
+    setSolvedLoading(true); setSolvedError("");
+    try {
+      const response = await fetch(`/api/leetcode/${encodeURIComponent(clean)}/solved-list`, { cache: "no-store" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Could not load accepted submissions.");
+      setSolvedProblems(Array.isArray(payload.problems) ? payload.problems : []);
+    } catch (e) {
+      setSolvedError(e instanceof Error ? e.message : "Could not load solved problems.");
+    } finally { setSolvedLoading(false); }
+  }
+  useEffect(() => { if (activeTab === "solved" && solvedProblems.length === 0 && !solvedLoading) void loadSolvedProblems(); }, [activeTab]);
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem("codetrack-revisions-v1");
@@ -115,6 +135,7 @@ export default function Dashboard() {
       <nav className="dashboard-tabs" aria-label="Dashboard sections">
         <button className={activeTab === "overview" ? "tab active" : "tab"} onClick={() => setActiveTab("overview")}><Activity size={15}/> Overview</button>
         <button className={activeTab === "topics" ? "tab active" : "tab"} onClick={() => setActiveTab("topics")}><Brain size={15}/> DSA topics</button>
+        <button className={activeTab === "solved" ? "tab active" : "tab"} onClick={() => setActiveTab("solved")}><ListChecks size={15}/> Solved problems</button>
         <button className={activeTab === "revision" ? "tab active" : "tab"} onClick={() => setActiveTab("revision")}><RotateCcw size={15}/> Revision queue <span className="tab-count">{revisions.length}</span></button>
       </nav>
 
@@ -170,6 +191,20 @@ export default function Dashboard() {
         <div className="panel-heading"><div><div className="panel-title"><Brain size={18}/> DSA topic checklist</div><p>Mark topics you want to focus on this week. This is your self-assessment, not an inferred score.</p></div><span className="panel-badge">{selectedTopics.length} FOCUS AREAS</span></div>
         <div className="topic-grid">{topics.map(topic => <label key={topic.name} className={`topic-card ${selectedTopics.includes(topic.name) ? "topic-selected" : ""}`}><input type="checkbox" checked={selectedTopics.includes(topic.name)} onChange={e => setSelectedTopics(old => e.target.checked ? [...old, topic.name] : old.filter(name => name !== topic.name))}/><div className="topic-card-main"><strong>{topic.name}</strong><span>{topic.note}</span></div><span className="topic-level">{topic.level}</span></label>)}</div>
         <div className="topic-tip"><BookOpen size={16}/><span><b>Interview strategy:</b> solve a representative Medium problem, explain the approach aloud, analyze time/space complexity, then revisit it in 1, 3, and 7 days.</span></div>
+      </section>}
+      {activeTab === "solved" && <section className="panel solved-panel">
+        <div className="panel-heading"><div><div className="panel-title"><ListChecks size={18}/> Solved problems library</div><p>Recent accepted submissions from your public profile, deduplicated by problem slug when available.</p></div><button className="refresh-button" onClick={loadSolvedProblems} disabled={solvedLoading}><RefreshCw size={13}/> {solvedLoading ? "Loading…" : "Refresh list"}</button></div>
+        <div className="solved-toolbar">
+          <label className="solved-search"><Search size={15}/><input value={solvedSearch} onChange={e => setSolvedSearch(e.target.value)} placeholder="Search problems…"/></label>
+          <select value={difficultyFilter} onChange={e => setDifficultyFilter(e.target.value)} aria-label="Filter by difficulty"><option>All</option><option>Easy</option><option>Medium</option><option>Hard</option><option>Unknown</option></select>
+        </div>
+        {solvedError && <p role="alert" className="error">{solvedError}</p>}
+        {solvedLoading && solvedProblems.length === 0 ? <div className="empty-state"><div className="empty-icon"><RefreshCw size={22}/></div><strong>Loading accepted submissions</strong><span>Fetching public submission data from the community API.</span></div> :
+        (() => {
+          const filtered = solvedProblems.filter(problem => (difficultyFilter === "All" || problem.difficulty.toLowerCase() === difficultyFilter.toLowerCase()) && `${problem.title} ${problem.slug}`.toLowerCase().includes(solvedSearch.toLowerCase()));
+          return filtered.length ? <><div className="solved-summary"><span><b>{filtered.length}</b> shown · <b>{solvedProblems.length}</b> unique problems returned</span><span>Recent public history</span></div><div className="solved-table-wrap"><table className="solved-table"><thead><tr><th>Problem</th><th>Difficulty</th><th>Language</th><th>Accepted</th><th></th></tr></thead><tbody>{filtered.map((problem, index) => <tr key={problem.slug || problem.id || `${problem.title}-${index}`}><td><a href={problem.url} target="_blank" rel="noreferrer">{problem.title}<ExternalLink size={12}/></a></td><td><span className={`difficulty-pill ${problem.difficulty.toLowerCase()}`}>{problem.difficulty}</span></td><td>{problem.language}</td><td>{problem.timestamp ? new Date(problem.timestamp > 1e12 ? problem.timestamp : problem.timestamp * 1000).toLocaleDateString() : "—"}</td><td><button className="queue-problem" onClick={() => { setRevisions(old => old.some(r => r.title === problem.title) ? old : [{id: `${Date.now()}-${problem.id}`, title: problem.title, topic: "Arrays & Hashing", due: "tomorrow", note: ""}, ...old]); setActiveTab("revision"); }}>Revise</button></td></tr>)}</tbody></table></div></> : <div className="empty-state"><div className="empty-icon"><ListChecks size={22}/></div><strong>{solvedProblems.length ? "No matching problems" : "No submissions returned"}</strong><span>{solvedProblems.length ? "Try another search or difficulty filter." : "The public API may be unavailable or return a different response format. The list is limited to recent accepted submissions, not guaranteed full history."}</span></div>;
+        })()}
+        <p className="disclaimer">This is a recent-submissions view, not a guaranteed complete archive of every problem you've ever solved. Public endpoint response formats and limits can change.</p>
       </section>}
       {activeTab === "revision" && <section className="panel revision-panel">
         <div className="panel-heading"><div><div className="panel-title"><RotateCcw size={18}/> Revision queue</div><p>Keep track of problems to revisit. Saved in this browser on this device.</p></div><span className="panel-badge">{revisions.length} SAVED</span></div>
