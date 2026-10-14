@@ -35,8 +35,11 @@ export default function Dashboard() {
   const [solvedProblems, setSolvedProblems] = useState<SolvedProblem[]>([]);
   const [solvedLoading, setSolvedLoading] = useState(false);
   const [solvedError, setSolvedError] = useState("");
+  const [solvedNotice, setSolvedNotice] = useState("");
   const [solvedSearch, setSolvedSearch] = useState("");
   const [difficultyFilter, setDifficultyFilter] = useState("All");
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 25;
   const [dailyGoal, setDailyGoal] = useState(2);
   const [completedToday, setCompletedToday] = useState(0);
   const [revisionTitle, setRevisionTitle] = useState("");
@@ -91,6 +94,9 @@ export default function Dashboard() {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Could not load accepted submissions.");
       setSolvedProblems(Array.isArray(payload.problems) ? payload.problems : []);
+      setSolvedNotice(payload.authWarning || (payload.authenticated
+        ? "Authenticated submission history loaded."
+        : "Showing the recent public submission window. LeetCode's public endpoint may limit the list to 20 submissions."));
     } catch (e) {
       setSolvedError(e instanceof Error ? e.message : "Could not load solved problems.");
     } finally { setSolvedLoading(false); }
@@ -195,14 +201,75 @@ export default function Dashboard() {
       {activeTab === "solved" && <section className="panel solved-panel">
         <div className="panel-heading"><div><div className="panel-title"><ListChecks size={18}/> Solved problems library</div><p>Recent accepted submissions from your public profile, deduplicated by problem slug when available.</p></div><button className="refresh-button" onClick={loadSolvedProblems} disabled={solvedLoading}><RefreshCw size={13}/> {solvedLoading ? "Loading…" : "Refresh list"}</button></div>
         <div className="solved-toolbar">
-          <label className="solved-search"><Search size={15}/><input value={solvedSearch} onChange={e => setSolvedSearch(e.target.value)} placeholder="Search problems…"/></label>
+          <label className="solved-search"><Search size={15}/><input
+  value={solvedSearch}
+  onChange={e => {
+    setSolvedSearch(e.target.value);
+    setCurrentPage(1);
+  }}
+  placeholder="Search problems…"
+/></label>
           <select value={difficultyFilter} onChange={e => setDifficultyFilter(e.target.value)} aria-label="Filter by difficulty"><option>All</option><option>Easy</option><option>Medium</option><option>Hard</option><option>Unknown</option></select>
         </div>
         {solvedError && <p role="alert" className="error">{solvedError}</p>}
+        {solvedNotice && <p className="solved-notice"><Activity size={14}/>{solvedNotice}</p>}
         {solvedLoading && solvedProblems.length === 0 ? <div className="empty-state"><div className="empty-icon"><RefreshCw size={22}/></div><strong>Loading accepted submissions</strong><span>Fetching public submission data from the community API.</span></div> :
         (() => {
           const filtered = solvedProblems.filter(problem => (difficultyFilter === "All" || problem.difficulty.toLowerCase() === difficultyFilter.toLowerCase()) && `${problem.title} ${problem.slug}`.toLowerCase().includes(solvedSearch.toLowerCase()));
-          return filtered.length ? <><div className="solved-summary"><span><b>{filtered.length}</b> shown · <b>{solvedProblems.length}</b> unique problems returned</span><span>Recent public history</span></div><div className="solved-table-wrap"><table className="solved-table"><thead><tr><th>Problem</th><th>Difficulty</th><th>Language</th><th>Accepted</th><th></th></tr></thead><tbody>{filtered.map((problem, index) => <tr key={problem.slug || problem.id || `${problem.title}-${index}`}><td><a href={problem.url} target="_blank" rel="noreferrer">{problem.title}<ExternalLink size={12}/></a></td><td><span className={`difficulty-pill ${problem.difficulty.toLowerCase()}`}>{problem.difficulty}</span></td><td>{problem.language}</td><td>{problem.timestamp ? new Date(problem.timestamp > 1e12 ? problem.timestamp : problem.timestamp * 1000).toLocaleDateString() : "—"}</td><td><button className="queue-problem" onClick={() => { setRevisions(old => old.some(r => r.title === problem.title) ? old : [{id: `${Date.now()}-${problem.id}`, title: problem.title, topic: "Arrays & Hashing", due: "tomorrow", note: ""}, ...old]); setActiveTab("revision"); }}>Revise</button></td></tr>)}</tbody></table></div></> : <div className="empty-state"><div className="empty-icon"><ListChecks size={22}/></div><strong>{solvedProblems.length ? "No matching problems" : "No submissions returned"}</strong><span>{solvedProblems.length ? "Try another search or difficulty filter." : "The public API may be unavailable or return a different response format. The list is limited to recent accepted submissions, not guaranteed full history."}</span></div>;
+          const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+const safePage = Math.min(currentPage, totalPages);
+const pageProblems = filtered.slice(
+  (safePage - 1) * pageSize,
+  safePage * pageSize
+);
+          return filtered.length ? <><div className="solved-summary"><span><b>{filtered.length}</b> shown · <b>{solvedProblems.length}</b> unique problems returned</span><span>Recent public history</span></div><div className="solved-table-wrap"><table className="solved-table"><thead><tr><th>Problem</th><th>Difficulty</th><th>Language</th><th>Accepted</th><th></th></tr></thead><tbody>{pageProblems.map((problem, index) => <tr key={problem.slug || problem.id || `${problem.title}-${index}`}><td><a href={problem.url} target="_blank" rel="noreferrer">{problem.title}<ExternalLink size={12}/></a></td><td><span className={`difficulty-pill ${problem.difficulty.toLowerCase()}`}>{problem.difficulty}</span></td><td>{problem.language}</td><td>{problem.timestamp ? new Date(problem.timestamp > 1e12 ? problem.timestamp : problem.timestamp * 1000).toLocaleDateString() : "—"}</td><td><button className="queue-problem" onClick={() => { setRevisions(old => old.some(r => r.title === problem.title) ? old : [{id: `${Date.now()}-${problem.id}`, title: problem.title, topic: "Arrays & Hashing", due: "tomorrow", note: ""}, ...old]); setActiveTab("revision"); }}>Revise</button></td></tr>)}</tbody></table></div> <div className="pagination">
+  <span className="pagination-info">
+    Showing {filtered.length === 0 ? 0 : (safePage - 1) * pageSize + 1}
+    –{Math.min(safePage * pageSize, filtered.length)}
+    {" "}of {filtered.length}
+  </span>
+
+  <div className="pagination-controls">
+    <button
+      className="page-button"
+      disabled={safePage === 1}
+      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+    >
+      Previous
+    </button>
+
+    {Array.from({ length: totalPages }, (_, i) => i + 1)
+      .filter(page =>
+        page === 1 ||
+        page === totalPages ||
+        Math.abs(page - safePage) <= 1
+      )
+      .map((page, index, pages) => (
+        <span key={page} className="page-group">
+          {index > 0 && pages[index - 1] !== page - 1 && (
+            <span className="page-ellipsis">…</span>
+          )}
+          <button
+            className={`page-button ${page === safePage ? "active" : ""}`}
+            aria-current={page === safePage ? "page" : undefined}
+            onClick={() => setCurrentPage(page)}
+          >
+            {page}
+          </button>
+        </span>
+      ))}
+
+    <button
+      className="page-button"
+      disabled={safePage >= totalPages}
+      onClick={() =>
+        setCurrentPage(p => Math.min(totalPages, p + 1))
+      }
+    >
+      Next
+    </button>
+  </div>
+</div></> : <div className="empty-state"><div className="empty-icon"><ListChecks size={22}/></div><strong>{solvedProblems.length ? "No matching problems" : "No submissions returned"}</strong><span>{solvedProblems.length ? "Try another search or difficulty filter." : "The public API may be unavailable or return a different response format. The list is limited to recent accepted submissions, not guaranteed full history."}</span></div>;
         })()}
         <p className="disclaimer">This is a recent-submissions view, not a guaranteed complete archive of every problem you've ever solved. Public endpoint response formats and limits can change.</p>
       </section>}
