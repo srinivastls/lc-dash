@@ -209,7 +209,7 @@ export async function GET(_request: Request, context: { params: Promise<{ userna
   try {
     const sessionCookie = process.env.LEETCODE_SESSION_COOKIE?.trim();
     let rawData: unknown;
-    let scope: string;
+    let scope = "all";
     let authWarning: string | undefined;
 
     
