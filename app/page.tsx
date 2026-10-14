@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { Activity, ArrowUpRight, Brain, CalendarDays, CheckCircle2, Flame, RefreshCw, Target, Trophy, BookOpen, Clock3, RotateCcw, Plus, Trash2, Search, ExternalLink, ListChecks } from "lucide-react";
 
-type Revision = { id: string; title: string; topic: string; due: string; note: string };
+type Revision = { id: string; title: string; topic: string; due: string; note: string; confidence?: number; status?: "Due" | "Practising" | "Mastered" };
+type PracticeSession = { id: string; date: string; duration: number; problem: string; outcome: string; notes: string };
 type SolvedProblem = { id: string; title: string; slug: string; difficulty: string; timestamp: number | null; language: string; status: string; url: string };
 type Stats = {
   username: string;
@@ -31,7 +32,7 @@ export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"overview" | "topics" | "revision" | "solved">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "topics" | "revision" | "solved" | "mock">("overview");
   const [solvedProblems, setSolvedProblems] = useState<SolvedProblem[]>([]);
   const [solvedLoading, setSolvedLoading] = useState(false);
   const [solvedError, setSolvedError] = useState("");
@@ -39,9 +40,18 @@ export default function Dashboard() {
   const [solvedSearch, setSolvedSearch] = useState("");
   const [difficultyFilter, setDifficultyFilter] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 25;
+  const pageSize = 15;
   const [dailyGoal, setDailyGoal] = useState(2);
   const [completedToday, setCompletedToday] = useState(0);
+  const [dailyDate, setDailyDate] = useState("");
+  const [mockMinutes, setMockMinutes] = useState(35);
+  const [mockRunning, setMockRunning] = useState(false);
+  const [mockStartedAt, setMockStartedAt] = useState<number | null>(null);
+  const [mockElapsed, setMockElapsed] = useState(0);
+  const [mockProblem, setMockProblem] = useState("");
+  const [mockOutcome, setMockOutcome] = useState("Solved independently");
+  const [mockNotes, setMockNotes] = useState("");
+  const [practiceSessions, setPracticeSessions] = useState<PracticeSession[]>([]);
   const [revisionTitle, setRevisionTitle] = useState("");
   const [revisionTopic, setRevisionTopic] = useState("Arrays & Hashing");
   const [revisionDue, setRevisionDue] = useState("tomorrow");
@@ -85,6 +95,42 @@ export default function Dashboard() {
   const calendarEntries = stats ? Object.entries(stats.calendar).sort(([a], [b]) => a.localeCompare(b)).slice(-140) : [];
 
   useEffect(() => { void loadStats(); }, []);
+  useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    setDailyDate(today);
+    try {
+      const saved = window.localStorage.getItem("codetrack-daily-v1");
+      if (saved) {
+        const parsed = JSON.parse(saved) as { date?: string; completed?: number; goal?: number };
+        if (parsed.date === today) {
+          setCompletedToday(Math.max(0, Number(parsed.completed) || 0));
+          if (parsed.goal) setDailyGoal(Math.min(5, Math.max(1, Number(parsed.goal))));
+        }
+      }
+      const sessions = window.localStorage.getItem("codetrack-practice-v1");
+      if (sessions) setPracticeSessions(JSON.parse(sessions) as PracticeSession[]);
+      const savedTopics = window.localStorage.getItem("codetrack-topics-v1");
+      if (savedTopics) setSelectedTopics(JSON.parse(savedTopics) as string[]);
+    } catch { /* optional browser persistence */ }
+  }, []);
+  useEffect(() => {
+    if (!dailyDate) return;
+    try { window.localStorage.setItem("codetrack-daily-v1", JSON.stringify({ date: dailyDate, completed: completedToday, goal: dailyGoal })); }
+    catch { /* storage may be disabled */ }
+  }, [dailyDate, completedToday, dailyGoal]);
+  useEffect(() => {
+    try { window.localStorage.setItem("codetrack-topics-v1", JSON.stringify(selectedTopics)); }
+    catch { /* storage may be disabled */ }
+  }, [selectedTopics]);
+  useEffect(() => {
+    try { window.localStorage.setItem("codetrack-practice-v1", JSON.stringify(practiceSessions)); }
+    catch { /* storage may be disabled */ }
+  }, [practiceSessions]);
+  useEffect(() => {
+    if (!mockRunning || mockStartedAt === null) return;
+    const timer = window.setInterval(() => setMockElapsed(Math.floor((Date.now() - mockStartedAt) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, [mockRunning, mockStartedAt]);
   async function loadSolvedProblems() {
     const clean = (stats?.username || username).trim().replace(/^@/, "");
     if (!clean) { setSolvedError("Enter your LeetCode username above first."); return; }
@@ -143,6 +189,7 @@ export default function Dashboard() {
         <button className={activeTab === "topics" ? "tab active" : "tab"} onClick={() => setActiveTab("topics")}><Brain size={15}/> DSA topics</button>
         <button className={activeTab === "solved" ? "tab active" : "tab"} onClick={() => setActiveTab("solved")}><ListChecks size={15}/> Solved problems</button>
         <button className={activeTab === "revision" ? "tab active" : "tab"} onClick={() => setActiveTab("revision")}><RotateCcw size={15}/> Revision queue <span className="tab-count">{revisions.length}</span></button>
+        <button className={activeTab === "mock" ? "tab active" : "tab"} onClick={() => setActiveTab("mock")}><Clock3 size={15}/> Mock interview</button>
       </nav>
 
       {activeTab === "overview" && <>
@@ -201,87 +248,38 @@ export default function Dashboard() {
       {activeTab === "solved" && <section className="panel solved-panel">
         <div className="panel-heading"><div><div className="panel-title"><ListChecks size={18}/> Solved problems library</div><p>Recent accepted submissions from your public profile, deduplicated by problem slug when available.</p></div><button className="refresh-button" onClick={loadSolvedProblems} disabled={solvedLoading}><RefreshCw size={13}/> {solvedLoading ? "Loading…" : "Refresh list"}</button></div>
         <div className="solved-toolbar">
-          <label className="solved-search"><Search size={15}/><input
-  value={solvedSearch}
-  onChange={e => {
-    setSolvedSearch(e.target.value);
-    setCurrentPage(1);
-  }}
-  placeholder="Search problems…"
-/></label>
-          <select value={difficultyFilter} onChange={e => setDifficultyFilter(e.target.value)} aria-label="Filter by difficulty"><option>All</option><option>Easy</option><option>Medium</option><option>Hard</option><option>Unknown</option></select>
+          <label className="solved-search"><Search size={15}/><input value={solvedSearch} onChange={e => { setSolvedSearch(e.target.value); setCurrentPage(1); }} placeholder="Search problems…"/></label>
+          <select value={difficultyFilter} onChange={e => { setDifficultyFilter(e.target.value); setCurrentPage(1); }} aria-label="Filter by difficulty"><option>All</option><option>Easy</option><option>Medium</option><option>Hard</option><option>Unknown</option></select>
         </div>
         {solvedError && <p role="alert" className="error">{solvedError}</p>}
         {solvedNotice && <p className="solved-notice"><Activity size={14}/>{solvedNotice}</p>}
         {solvedLoading && solvedProblems.length === 0 ? <div className="empty-state"><div className="empty-icon"><RefreshCw size={22}/></div><strong>Loading accepted submissions</strong><span>Fetching public submission data from the community API.</span></div> :
         (() => {
           const filtered = solvedProblems.filter(problem => (difficultyFilter === "All" || problem.difficulty.toLowerCase() === difficultyFilter.toLowerCase()) && `${problem.title} ${problem.slug}`.toLowerCase().includes(solvedSearch.toLowerCase()));
-          const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-const safePage = Math.min(currentPage, totalPages);
-const pageProblems = filtered.slice(
-  (safePage - 1) * pageSize,
-  safePage * pageSize
-);
-          return filtered.length ? <><div className="solved-summary"><span><b>{filtered.length}</b> shown · <b>{solvedProblems.length}</b> unique problems returned</span><span>Recent public history</span></div><div className="solved-table-wrap"><table className="solved-table"><thead><tr><th>Problem</th><th>Difficulty</th><th>Language</th><th>Accepted</th><th></th></tr></thead><tbody>{pageProblems.map((problem, index) => <tr key={problem.slug || problem.id || `${problem.title}-${index}`}><td><a href={problem.url} target="_blank" rel="noreferrer">{problem.title}<ExternalLink size={12}/></a></td><td><span className={`difficulty-pill ${problem.difficulty.toLowerCase()}`}>{problem.difficulty}</span></td><td>{problem.language}</td><td>{problem.timestamp ? new Date(problem.timestamp > 1e12 ? problem.timestamp : problem.timestamp * 1000).toLocaleDateString() : "—"}</td><td><button className="queue-problem" onClick={() => { setRevisions(old => old.some(r => r.title === problem.title) ? old : [{id: `${Date.now()}-${problem.id}`, title: problem.title, topic: "Arrays & Hashing", due: "tomorrow", note: ""}, ...old]); setActiveTab("revision"); }}>Revise</button></td></tr>)}</tbody></table></div> <div className="pagination">
-  <span className="pagination-info">
-    Showing {filtered.length === 0 ? 0 : (safePage - 1) * pageSize + 1}
-    –{Math.min(safePage * pageSize, filtered.length)}
-    {" "}of {filtered.length}
-  </span>
-
-  <div className="pagination-controls">
-    <button
-      className="page-button"
-      disabled={safePage === 1}
-      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-    >
-      Previous
-    </button>
-
-    {Array.from({ length: totalPages }, (_, i) => i + 1)
-      .filter(page =>
-        page === 1 ||
-        page === totalPages ||
-        Math.abs(page - safePage) <= 1
-      )
-      .map((page, index, pages) => (
-        <span key={page} className="page-group">
-          {index > 0 && pages[index - 1] !== page - 1 && (
-            <span className="page-ellipsis">…</span>
-          )}
-          <button
-            className={`page-button ${page === safePage ? "active" : ""}`}
-            aria-current={page === safePage ? "page" : undefined}
-            onClick={() => setCurrentPage(page)}
-          >
-            {page}
-          </button>
-        </span>
-      ))}
-
-    <button
-      className="page-button"
-      disabled={safePage >= totalPages}
-      onClick={() =>
-        setCurrentPage(p => Math.min(totalPages, p + 1))
-      }
-    >
-      Next
-    </button>
-  </div>
-</div></> : <div className="empty-state"><div className="empty-icon"><ListChecks size={22}/></div><strong>{solvedProblems.length ? "No matching problems" : "No submissions returned"}</strong><span>{solvedProblems.length ? "Try another search or difficulty filter." : "The public API may be unavailable or return a different response format. The list is limited to recent accepted submissions, not guaranteed full history."}</span></div>;
+          return filtered.length ? (() => { const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize)); const safePage = Math.min(currentPage, totalPages); const pageProblems = filtered.slice((safePage - 1) * pageSize, safePage * pageSize); return <><div className="solved-summary"><span><b>{filtered.length}</b> matching · <b>{solvedProblems.length}</b> unique problems returned</span><span>Page {safePage} of {totalPages}</span></div><div className="solved-table-wrap"><table className="solved-table"><thead><tr><th>Problem</th><th>Difficulty</th><th>Language</th><th>Accepted</th><th></th></tr></thead><tbody>{pageProblems.map((problem, index) => <tr key={problem.slug || problem.id || `${problem.title}-${index}`}><td><a href={problem.url} target="_blank" rel="noreferrer">{problem.title}<ExternalLink size={12}/></a></td><td><span className={`difficulty-pill ${problem.difficulty.toLowerCase()}`}>{problem.difficulty}</span></td><td>{problem.language}</td><td>{problem.timestamp ? new Date(problem.timestamp > 1e12 ? problem.timestamp : problem.timestamp * 1000).toLocaleDateString() : "—"}</td><td><button className="queue-problem" onClick={() => { setRevisions(old => old.some(r => r.title === problem.title) ? old : [{id: `${Date.now()}-${problem.id}`, title: problem.title, topic: "Arrays & Hashing", due: "tomorrow", note: "", confidence: 2, status: "Due"}, ...old]); setActiveTab("revision"); }}>Revise</button></td></tr>)}</tbody></table></div><div className="pagination"><span className="pagination-info">Showing {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filtered.length)} of {filtered.length}</span><div className="pagination-controls"><button className="page-button" disabled={safePage === 1} onClick={() => setCurrentPage(v => Math.max(1, v - 1))}>Previous</button><span className="page-number">{safePage} / {totalPages}</span><button className="page-button" disabled={safePage >= totalPages} onClick={() => setCurrentPage(v => Math.min(totalPages, v + 1))}>Next</button></div></div></>; })() : <div className="empty-state"><div className="empty-icon"><ListChecks size={22}/></div><strong>{solvedProblems.length ? "No matching problems" : "No submissions returned"}</strong><span>{solvedProblems.length ? "Try another search or difficulty filter." : "The public API may be unavailable or return a different response format. The list is limited to recent accepted submissions, not guaranteed full history."}</span></div>;
         })()}
         <p className="disclaimer">This is a recent-submissions view, not a guaranteed complete archive of every problem you've ever solved. Public endpoint response formats and limits can change.</p>
       </section>}
       {activeTab === "revision" && <section className="panel revision-panel">
         <div className="panel-heading"><div><div className="panel-title"><RotateCcw size={18}/> Revision queue</div><p>Keep track of problems to revisit. Saved in this browser on this device.</p></div><span className="panel-badge">{revisions.length} SAVED</span></div>
-        <form className="revision-form" onSubmit={e => { e.preventDefault(); if (!revisionTitle.trim()) return; setRevisions(old => [{id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, title: revisionTitle.trim(), topic: revisionTopic, due: revisionDue, note: ""}, ...old]); setRevisionTitle(""); }}>
+        <form className="revision-form" onSubmit={e => { e.preventDefault(); if (!revisionTitle.trim()) return; setRevisions(old => [{id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, title: revisionTitle.trim(), topic: revisionTopic, due: revisionDue, note: "", confidence: 2, status: "Due"}, ...old]); setRevisionTitle(""); }}>
           <label className="revision-field revision-title-field"><span>Problem name or link</span><input value={revisionTitle} onChange={e => setRevisionTitle(e.target.value)} placeholder="e.g. Longest Substring Without Repeating Characters" required/></label>
           <label className="revision-field"><span>Topic</span><select value={revisionTopic} onChange={e => setRevisionTopic(e.target.value)}>{topics.map(t => <option key={t.name}>{t.name}</option>)}</select></label>
           <label className="revision-field"><span>Review</span><select value={revisionDue} onChange={e => setRevisionDue(e.target.value)}><option value="today">Today</option><option value="tomorrow">Tomorrow</option><option value="3 days">In 3 days</option><option value="7 days">In 7 days</option></select></label>
           <button className="add-revision" type="submit"><Plus size={15}/> Add problem</button>
         </form>
-        {revisions.length === 0 ? <div className="empty-state"><div className="empty-icon"><RotateCcw size={22}/></div><strong>Your revision queue is clear</strong><span>Add problems you struggled with so you can solve them again without looking at the solution.</span></div> : <div className="revision-list">{revisions.map(item => <div className="revision-item" key={item.id}><div className="revision-item-icon"><Clock3 size={17}/></div><div className="revision-item-copy"><strong>{item.title}</strong><span>{item.topic} · Review {item.due}</span></div><button className="delete-revision" aria-label={`Remove ${item.title}`} onClick={() => setRevisions(old => old.filter(r => r.id !== item.id))}><Trash2 size={16}/></button></div>)}</div>}
+        {revisions.length === 0 ? <div className="empty-state"><div className="empty-icon"><RotateCcw size={22}/></div><strong>Your revision queue is clear</strong><span>Add problems you struggled with so you can solve them again without looking at the solution.</span></div> : <div className="revision-list">{revisions.map(item => <div className="revision-item" key={item.id}><div className="revision-item-icon"><Clock3 size={17}/></div><div className="revision-item-copy"><strong>{item.title}</strong><span>{item.topic} · Review {item.due} · Confidence {item.confidence ?? 2}/5 · {item.status ?? "Due"}</span><div className="revision-actions"><label className="mini-select">Confidence <select value={item.confidence ?? 2} onChange={e => setRevisions(old => old.map(r => r.id === item.id ? {...r, confidence: Number(e.target.value)} : r))}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option><option value={4}>4</option><option value={5}>5</option></select></label><label className="mini-select">Status <select value={item.status ?? "Due"} onChange={e => setRevisions(old => old.map(r => r.id === item.id ? {...r, status: e.target.value as Revision["status"]} : r))}><option>Due</option><option>Practising</option><option>Mastered</option></select></label><input className="revision-note" aria-label={`Mistake note for ${item.title}`} placeholder="Mistake / lesson learned…" value={item.note} onChange={e => setRevisions(old => old.map(r => r.id === item.id ? {...r, note: e.target.value} : r))}/></div></div><button className="delete-revision" aria-label={`Remove ${item.title}`} onClick={() => setRevisions(old => old.filter(r => r.id !== item.id))}><Trash2 size={16}/></button></div>)}</div>}
+      </section>}
+      {activeTab === "mock" && <section className="panel mock-panel">
+        <div className="panel-heading"><div><div className="panel-title"><Clock3 size={18}/> Mock interview session</div><p>Practise explaining your approach, complexity, and edge cases under time pressure.</p></div><span className="panel-badge">LOCAL SESSION LOG</span></div>
+        <div className="mock-setup">
+          <label className="revision-field"><span>Time limit</span><select value={mockMinutes} disabled={mockRunning} onChange={e => setMockMinutes(Number(e.target.value))}><option value={25}>25 minutes</option><option value={35}>35 minutes</option><option value={45}>45 minutes</option><option value={60}>60 minutes</option></select></label>
+          <label className="revision-field"><span>Problem name / link</span><input value={mockProblem} onChange={e => setMockProblem(e.target.value)} placeholder="e.g. Number of Islands" /></label>
+        </div>
+        <div className="timer-face"><span>{Math.floor(Math.max(0, mockMinutes * 60 - mockElapsed) / 60).toString().padStart(2, "0")}:{(Math.max(0, mockMinutes * 60 - mockElapsed) % 60).toString().padStart(2, "0")}</span><small>{mockRunning ? "SESSION IN PROGRESS" : mockElapsed ? "SESSION PAUSED / STOPPED" : "READY WHEN YOU ARE"}</small></div>
+        <div className="mock-actions">{!mockRunning ? <button className="add-revision" onClick={() => { setMockElapsed(0); setMockStartedAt(Date.now()); setMockRunning(true); }}> <Clock3 size={15}/> Start session</button> : <button className="add-revision" onClick={() => { setMockElapsed(Math.floor((Date.now() - (mockStartedAt ?? Date.now())) / 1000)); setMockRunning(false); setMockStartedAt(null); }}>Pause timer</button>}<button className="refresh-button" onClick={() => { setMockRunning(false); setMockStartedAt(null); setMockElapsed(0); }}>Reset</button></div>
+        <div className="mock-review"><label className="revision-field"><span>Outcome</span><select value={mockOutcome} onChange={e => setMockOutcome(e.target.value)}><option>Solved independently</option><option>Solved with hints</option><option>Partial solution</option><option>Could not solve</option></select></label><label className="revision-field"><span>Debrief: approach, complexity, mistakes</span><textarea value={mockNotes} onChange={e => setMockNotes(e.target.value)} placeholder="What pattern did you use? What edge case did you miss? What will you review?" rows={3}/></label><button className="add-revision" disabled={!mockProblem.trim() || mockRunning || mockElapsed === 0} onClick={() => { const elapsed = mockElapsed; setPracticeSessions(old => [{id: `${Date.now()}`, date: new Date().toISOString(), duration: elapsed, problem: mockProblem.trim(), outcome: mockOutcome, notes: mockNotes.trim()}, ...old]); setMockProblem(""); setMockNotes(""); setMockElapsed(0); setMockStartedAt(null); }}>Save session review</button></div>
+        <div className="practice-history"><div className="panel-title">Recent practice sessions <span className="tab-count">{practiceSessions.length}</span></div>{practiceSessions.length === 0 ? <p className="muted-copy">Your saved mock interviews will appear here. Session history is stored in this browser.</p> : practiceSessions.slice(0, 8).map(session => <div className="practice-row" key={session.id}><div><strong>{session.problem}</strong><span>{new Date(session.date).toLocaleDateString()} · {Math.round(session.duration / 60)} min · {session.outcome}</span>{session.notes && <p>{session.notes}</p>}</div><button className="delete-revision" aria-label="Delete practice session" onClick={() => setPracticeSessions(old => old.filter(item => item.id !== session.id))}><Trash2 size={15}/></button></div>)}</div>
       </section>}
       <footer className="footer"><span>CODETRACK <i>·</i> PERSONAL DSA PROGRESS</span><span>{stats ? `Last loaded ${new Date(stats.updatedAt).toLocaleString()}` : "Waiting for your profile"}{stats?.ranking ? ` · Global rank ${pretty(stats.ranking)}` : ""}</span></footer>
       <p className="disclaimer">Data is provided by a community-maintained API and may be delayed or unavailable. The dashboard does not yet claim to track private submissions or automatically infer topic mastery.</p>
